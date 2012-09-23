@@ -3,13 +3,22 @@ skydrive-fuse-fs
 
 Script to mount Microsoft SkyDrive folder as a FUSE filesystem.
 
+This module is single-threaded and tries to do all operations as synchronously
+as possible - i.e. operations do not return until they're sequentially performed
+through the SkyDrive API, with the exception of metadata caches and any
+fuse/kernel caches.
+
+That, lots of limitations, and the fact that API calls over https tend to be
+quite slow and frequent even with a keepalive connections, make it unsuitable
+for use as a general-purpose fs.
+
+Main purpose of such abstraction is a convenient browsing (in shell or any
+general-purpose file manager), transfer or synchronization of files with simple
+unix tools like "ls", "cp" or "rsync".
+
 
 Limitations
 ----------------------------------------
-
-This module tries to do all operations as synchronously as possible -
-i.e. operations do not return until they're actually performed through the
-SkyDrive API, with the exception of metadata caches and any fuse/kernel caches.
 
 SkyDrive is not a filesystem (and in fact, basically a key-value storage), and
 doesn't expose anything resembling a posix fs interface, so lots of limitations
@@ -32,6 +41,15 @@ Rename operations are not atomic if destination path exists and is a file.
 Write and truncate operations are performed by downloading the whole file,
 modifying it locally, uploading file back under temporary name, deleting the
 original file and renaming uploaded file to original name.
+
+Not all potential API errors are translated into errno's (and probably not all
+of them can be mapped to these at all), and might manifest as EFAULT ("Bad
+Address") errors.
+Use "--debug" option to see which API calls might result in these - all
+fuse-requested operations and resulting API requests are logged there.
+
+uid/gid/mode can potentially be stored in object metadata, but that is not
+implemented, and I don't see much point in it.
 
 
 Usage
