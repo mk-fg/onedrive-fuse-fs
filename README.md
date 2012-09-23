@@ -94,6 +94,7 @@ Available mount options can be found in `skydrivefs --help` output
 (skydrive-specific) and `man mount.fuse` (more general fuse options).
 
 Latter example mounts "Pics" SkyDrive folder instead of root.
+"subdir" fuse module can be also used to the same effect.
 
 Make sure configuration file (`/var/lib/skydrive.yaml` in fstab examples above)
 is not accessible to anyone but root (or dedicated user), and is writable -

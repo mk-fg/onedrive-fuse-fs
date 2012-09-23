@@ -85,16 +85,19 @@ class SkyDriveFS(fuse.LoggingMixIn, fuse.Operations):
 
 		if api_cache and api_cache_scale > 0:
 			self._resolve = PerPathCache(
-				self.api.resolve_path, maxsize=int(200 * api_cache_scale) )
+				self._resolve_path, maxsize=int(200 * api_cache_scale) )
 			self._info = PerPathCache(
 				self.api.info, maxsize=int(100 * api_cache_scale) )
 			self._listdir = PerPathCache(
 				self.api.listdir, maxsize=int(50 * api_cache_scale) )
 		else:
 			self._resolve, self._info, self._listdir =\
-				self.api.resolve_path, self.api.info, self.api.listdir
+				self._resolve_path, self.api.info, self.api.listdir
 
 		self.created = set()
+
+	def _resolve_path(self, path):
+		return self.api.resolve_path(path, root_id=self.root)
 
 	def _purge(self, *entries, **kwz):
 		caches = kwz.keys() or ['info', 'listdir']
@@ -259,6 +262,7 @@ def main():
 		help='Writable configuration state-file (yaml).'
 			' Used to store authorization_code, access and refresh tokens.'
 			' Should initially contain at least something like "{client: {id: xxx, secret: yyy}}".'
+			' Path might be appended to it after colon to make only that folder accessible.'
 			' Default: %(default)s')
 	parser.add_argument('mountpoint', metavar='path', help='Path to mount SkyDrive to.')
 	parser.add_argument('-o', '--mount-options',
@@ -296,6 +300,7 @@ def main():
 
 	if ':' in optz.config:
 		optz.config, skydrive_path = optz.config.split(':', 1)
+		if not optz.config: optz.config = conf.ConfigMixin.conf_path_default
 	else: skydrive_path = None
 
 	api = api_v5.PersistentSkyDriveAPI.from_conf(optz.config)
