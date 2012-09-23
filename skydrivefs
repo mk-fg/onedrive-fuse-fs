@@ -161,6 +161,8 @@ class SkyDriveFS(fuse.LoggingMixIn, fuse.Operations):
 
 
 def main():
+	ignored_mount_opts = 'rw', 'exec', 'suid', 'dev', 'user'
+
 	import argparse
 	parser = argparse.ArgumentParser(
 		description='Mount SkyDrive as a FUSE filesystem.')
@@ -172,12 +174,23 @@ def main():
 			' Should initially contain at least something like "{client: {id: xxx, secret: yyy}}".'
 			' Default: %(default)s')
 	parser.add_argument('mountpoint', metavar='path', help='Path to mount SkyDrive to.')
+	parser.add_argument('-o', '--mount-options',
+		help='Supported options: none yet,'
+			' ignored: {}; rest will fail.'.format(', '.join(ignored_mount_opts)))
 	parser.add_argument('--debug', action='store_true', help='Verbose operation mode.')
 	optz = parser.parse_args()
 
 	log = logging.getLogger()
 	logging.basicConfig(level=logging.WARNING
 		if not optz.debug else logging.DEBUG)
+
+	if optz.mount_options:
+		for opt in optz.mount_options.strip().strip(',').split(','):
+			if '=' in opt: opt, val = opt.split('=', 1)
+			elif opt.startswith('no'): opt, val = opt[2:], False
+			else: val = True
+			if not opt or opt in ignored_mount_opts: continue
+			parser.error('Unsupported mount option: {}'.format(opt))
 
 	if ':' in optz.config:
 		optz.config, skydrive_path = optz.config.split(':', 1)

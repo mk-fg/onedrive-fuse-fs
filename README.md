@@ -22,21 +22,21 @@ tools)
 Usage from checkout (no installation - apart from aforementioned module(s) -
 necessary), can be run from unprivileged user:
 
-	% ./mount.skydrive /mnt/skydrive
+	% ./skydrivefs /mnt/skydrive
 
 Install to system-wide $PATH (might need system-wide fusepy module as well):
 
 	# pip install fusepy
-	# install -m755 mount.skydrive /usr/local/sbin/
+	# install -m755 skydrivefs /usr/local/sbin/
 
 Use from $PATH with `mount` command:
 
-	# mount -t fuse.skydrive ~/.lcrc /mnt/skydrive
+	# mount -t fuse.skydrivefs ~/.lcrc /mnt/skydrive
 
 Examples with fstab(5) syntax (any one of these will do):
 
-	/var/lib/skydrive.yaml /mnt/skydrive fuse.skydrive defaults 0 0
-	/var/lib/skydrive.yaml:Pics /mnt/skydrive fuse.skydrive defaults 0 0
+	/var/lib/skydrive.yaml /mnt/skydrive fuse.skydrivefs defaults 0 0
+	/var/lib/skydrive.yaml:Pics /mnt/skydrive fuse.skydrivefs defaults 0 0
 
 Latter example mounts "Pics" SkyDrive folder instead of root.
 
