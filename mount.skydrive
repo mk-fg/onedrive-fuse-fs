@@ -1,109 +1,129 @@
 #!/usr/bin/env python
+from __future__ import unicode_literals, print_function
+
+import itertools as it, operator as op, functools as ft
+from os.path import basename, dirname
+import os, sys, errno, stat, re, logging
 
 from skydrive import api_v5, conf
-
-from errno import EACCES
-from os.path import realpath
-from sys import argv, exit
-from threading import Lock
-
-import os
-
-from fuse import FUSE, FuseOSError, Operations, LoggingMixIn
+import fuse
 
 
-class Loopback(LoggingMixIn, Operations):
-	def __init__(self, root):
-		self.root = realpath(root)
-		self.rwlock = Lock()
+from datetime import datetime, timedelta
+from calendar import timegm
+try:
+	# raise ImportError()
+	import iso8601
+	def parse_ts(ts):
+		return timegm(iso8601.parse_date(ts).utctimetuple())
+except ImportError:
+	def parse_ts(ts):
+		try: (ts, tz), tz_mul = ts.rsplit('+', 1), 1
+		except ValueError: (ts, tz), tz_mul = ts.rsplit('-', 1), -1
+		ts_utc = datetime.strptime(ts, '%Y-%m-%dT%H:%M:%S')
+		ts_utc += timedelta(0, (int(tz[:2])*3600 + int(tz[2:])*60) * tz_mul)
+		return timegm(ts_utc.utctimetuple())
 
-	def __call__(self, op, path, *args):
-		return super(Loopback, self).__call__(op, self.root + path, *args)
+
+class SkyDriveFS(fuse.LoggingMixIn, fuse.Operations):
+
+	def __init__(self, api, root='me/skydrive', log=None):
+		self.api, self.root = api, root
+		self.log = log or logging.getLogger(
+			'{}.{}'.format(__name__, self.__class__.__name__) )
+
+	def __call__(self, op, *args):
+		try: res = super(SkyDriveFS, self).__call__(op, *args)
+		except api_v5.DoesNotExists:
+			raise fuse.FuseOSError(errno.ENOENT)
+		except api_v5.ProtocolError:
+			if err.code in [401, 403]: raise fuse.FuseOSError(errno.EACCES)
+			elif err.code == 404: raise fuse.FuseOSError(errno.ENOENT)
+			raise
+		return 0 if res is None else res
+
 
 	def access(self, path, mode):
-		if not os.access(path, mode):
-			raise FuseOSError(EACCES)
-
-	chmod = os.chmod
-	chown = os.chown
-
-	def create(self, path, mode):
-		return os.open(path, os.O_WRONLY | os.O_CREAT, mode)
-
-	def flush(self, path, fh):
-		return os.fsync(fh)
-
-	def fsync(self, path, datasync, fh):
-		return os.fsync(fh)
+		self.api.resolve_path(path)
 
 	def getattr(self, path, fh=None):
-		st = os.lstat(path)
-		return dict((key, getattr(st, key)) for key in ('st_atime', 'st_ctime',
-			'st_gid', 'st_mode', 'st_mtime', 'st_nlink', 'st_size', 'st_uid'))
+		obj = self.api.resolve_path(path, objects=True)
+		obj_mtime = obj.get('updated_time') or obj.get('created_time')
+		return dict( (k,v) for k,v in [
+			( 'st_mode', (stat.S_IFDIR | 0755)
+				if obj['type'] in ['folder', 'album'] else (stat.S_IFREG | 0644) ),
+			('st_mtime', obj_mtime and parse_ts(obj_mtime)),
+			('st_nlink', 2), ('st_size', obj.get('size')) ] if v is not None )
 
-	getxattr = None
-
-	def link(self, target, source):
-		return os.link(source, target)
-
-	listxattr = None
-	mkdir = os.mkdir
-	mknod = os.mknod
-	open = os.open
-
-	def read(self, path, size, offset, fh):
-		with self.rwlock:
-			os.lseek(fh, offset, 0)
-			return os.read(fh, size)
+	def mkdir(self, path, mode):
+		name, parent = basename(path),\
+			self.api.resolve_path(dirname(path)) or self.root
+		self.api.mkdir(name, parent)
 
 	def readdir(self, path, fh):
-		return ['.', '..'] + os.listdir(path)
-
-	readlink = os.readlink
-
-	def release(self, path, fh):
-		return os.close(fh)
+		return ['.', '..'] + map( op.itemgetter('name'),
+			self.api.listdir(self.api.resolve_path(path)) )
 
 	def rename(self, old, new):
-		return os.rename(old, self.root + new)
+		if old == new: return
+		new_dir, old_id = dirname(new), self.api.resolve_path(old)
+		if new_dir != dirname(old):
+			self.api.move(old_id, self.api.resolve_path(new_dir))
+		self.api.info_update(old_id, dict(name=basename(new)))
 
-	rmdir = os.rmdir
+	def rmdir(self, path):
+		path_id = self.api.resolve_path(path)
+		if not path_id.startswith('folder.'):
+			raise fuse.FuseOSError(errno.ENOTDIR)
+		elif self.api.listdir(path_id):
+			raise fuse.FuseOSError(errno.ENOTEMPTY)
+		self.api.delete(path_id)
 
 	def statfs(self, path):
-		stv = os.statvfs(path)
-		return dict((key, getattr(stv, key)) for key in ('f_bavail', 'f_bfree',
-			'f_blocks', 'f_bsize', 'f_favail', 'f_ffree', 'f_files', 'f_flag',
-			'f_frsize', 'f_namemax'))
+		free, quota = self.api.get_quota()
+		return dict( f_bavail=quota-free, f_bfree=free,
+			f_blocks=quota, f_bsize=1, f_favail=-1, f_ffree=-1,
+			f_files=-1, f_flag=0, f_frsize=1, f_namemax=256 )
 
-	def symlink(self, target, source):
-		return os.symlink(source, target)
+	def unlink(self, path):
+		path_id = self.api.resolve_path(path)
+		if path_id.startswith('folder.'):
+			raise fuse.FuseOSError(errno.EISDIR)
+		self.api.delete(path_id)
 
-	def truncate(self, path, length, fh=None):
-		with open(path, 'r+') as f:
-			f.truncate(length)
-
-	unlink = os.unlink
-	utimens = os.utime
-
-	def write(self, path, data, offset, fh):
-		with self.rwlock:
-			os.lseek(fh, offset, 0)
-			return os.write(fh, data)
 
 
 def main():
 	import argparse
 	parser = argparse.ArgumentParser(
 		description='Mount SkyDrive as a FUSE filesystem.')
-	parser.add_argument('config-file',
+	parser.add_argument('config',
+		metavar='config_path[:skydrive_path]',
 		nargs='?', default=conf.ConfigMixin.conf_path_default,
 		help='Writable configuration state-file (yaml).'
 			' Used to store authorization_code, access and refresh tokens.'
 			' Should initially contain at least something like "{client: {id: xxx, secret: yyy}}".'
 			' Default: %(default)s')
 	parser.add_argument('mountpoint', metavar='path', help='Path to mount SkyDrive to.')
+	parser.add_argument('--debug', action='store_true', help='Verbose operation mode.')
 	optz = parser.parse_args()
 
-	fuse = FUSE(Loopback(optz.config_file), optz.mountpoint, foreground=True)
+	log = logging.getLogger()
+	logging.basicConfig(level=logging.WARNING
+		if not optz.debug else logging.DEBUG)
+
+	if ':' in optz.config:
+		optz.config, skydrive_path = optz.config.split(':', 1)
+	else: skydrive_path = None
+
+	api = api_v5.PersistentSkyDriveAPI.from_conf(optz.config)
+	if not skydrive_path or not re.search(
+			r'^(file|folder)\.[0-9a-f]{16}\.[0-9A-F]{16}!\d+'
+			r'|folder\.[0-9a-f]{16}$', skydrive_path ):
+		skydrive_path = api.resolve_path(skydrive_path or 'me/skydrive')
+
+	fuse.FUSE(
+		SkyDriveFS(api, skydrive_path, log=log),
+		optz.mountpoint, foreground=True )
 
 if __name__ == '__main__': main()
