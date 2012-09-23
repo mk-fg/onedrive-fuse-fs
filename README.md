@@ -1,7 +1,7 @@
-skydrive-fuse
+skydrive-fuse-fs
 ----------------------------------------
 
-Script to mount skydrive as a FUSE filesystem.
+Script to mount Microsoft SkyDrive folder as a FUSE filesystem.
 
 
 Usage
