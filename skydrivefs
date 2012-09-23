@@ -4,6 +4,7 @@ from __future__ import unicode_literals, print_function
 import itertools as it, operator as op, functools as ft
 from os.path import basename, dirname
 from collections import OrderedDict, namedtuple
+from tempfile import NamedTemporaryFile
 import os, sys, types, errno, stat, re, logging
 
 from skydrive import api_v5, conf
@@ -93,30 +94,37 @@ class SkyDriveFS(fuse.LoggingMixIn, fuse.Operations):
 			self._resolve, self._info, self._listdir =\
 				self.api.resolve_path, self.api.info, self.api.listdir
 
+		self.created = set()
+
 	def _purge(self, *entries, **kwz):
 		caches = kwz.keys() or ['info', 'listdir']
 		for entry in entries:
-			if isinstance(entry, types.StringTypes): ec = [caches]
+			if isinstance(entry, types.StringTypes): ec = caches
 			else: entry, ec = entry
-			for cache in ec: op.attrgetter('_{}.purge'.format(cache))(self)(entry)
+			if isinstance(ec, types.StringTypes): ec = [ec]
+			for cache in ec:
+				# print('PURGE', entry, cache)
+				op.attrgetter('_{}.purge'.format(cache))(self)(entry)
 
 
 	def __call__(self, op, *args):
 		try: res = super(SkyDriveFS, self).__call__(op, *args)
 		except api_v5.DoesNotExists:
 			raise fuse.FuseOSError(errno.ENOENT)
-		except api_v5.ProtocolError:
+		except api_v5.ProtocolError as err:
 			if err.code in [401, 403]: raise fuse.FuseOSError(errno.EACCES)
 			elif err.code == 404: raise fuse.FuseOSError(errno.ENOENT)
 			raise
 		return 0 if res is None else res
 
 
-	def access(self, path, mode):
-		self._resolve(path)
+	def _isdir(self, obj_id):
+		return self._info(obj_id).get('type') in ['folder', 'album']
+
 
 	def getattr(self, path, fh=None):
-		obj = self._info(self._resolve(path))
+		obj = self._info(self._resolve(path))\
+			if path not in self.created else dict(type='file', size=0)
 		obj_mtime = obj.get('updated_time') or obj.get('created_time')
 		return dict( (k,v) for k,v in [
 			( 'st_mode', (stat.S_IFDIR | 0755)
@@ -124,15 +132,25 @@ class SkyDriveFS(fuse.LoggingMixIn, fuse.Operations):
 			('st_mtime', obj_mtime and parse_ts(obj_mtime)),
 			('st_nlink', 2), ('st_size', obj.get('size')) ] if v is not None )
 
+	def access(self, path, mode):
+		self._resolve(path)
+
+	def readdir(self, path, fh):
+		return ['.', '..'] + map( op.itemgetter('name'),
+			self._listdir(self._resolve(path)) )
+
+	def statfs(self, path):
+		free, quota = self.api.get_quota()
+		return dict( f_bavail=quota-free, f_bfree=free,
+			f_blocks=quota, f_bsize=1, f_favail=-1, f_ffree=-1,
+			f_files=-1, f_flag=0, f_frsize=1, f_namemax=256 )
+
+
 	def mkdir(self, path, mode):
 		name, parent = basename(path),\
 			self._resolve(dirname(path)) or self.root
 		self.api.mkdir(name, parent)
 		self._purge(parent)
-
-	def readdir(self, path, fh):
-		return ['.', '..'] + map( op.itemgetter('name'),
-			self._listdir(self._resolve(path)) )
 
 	def rename(self, old, new):
 		if old == new: return
@@ -141,30 +159,87 @@ class SkyDriveFS(fuse.LoggingMixIn, fuse.Operations):
 		if new_dir != old_dir:
 			self.api.move(old_id, self._resolve(new_dir))
 			self._purge(old_dir, (old, 'resolve'))
+		# If remote path with same name exists, delete it
+		try: self.unlink(path) # to raise EISDIR, if necessary
+		except api_v5.DoesNotExists: pass
 		self.api.info_update(old_id, dict(name=basename(new)))
 		self._purge(new_dir)
 
 	def rmdir(self, path):
 		path_id = self._resolve(path)
-		if not path_id.startswith('folder.'):
+		if not self._isdir(path_id):
 			raise fuse.FuseOSError(errno.ENOTDIR)
 		elif self._listdir(path_id):
 			raise fuse.FuseOSError(errno.ENOTEMPTY)
 		self.api.delete(path_id)
 		self._purge(dirname(path), (path, 'resolve'))
 
-	def statfs(self, path):
-		free, quota = self.api.get_quota()
-		return dict( f_bavail=quota-free, f_bfree=free,
-			f_blocks=quota, f_bsize=1, f_favail=-1, f_ffree=-1,
-			f_files=-1, f_flag=0, f_frsize=1, f_namemax=256 )
-
 	def unlink(self, path):
 		path_id = self._resolve(path)
-		if path_id.startswith('folder.'):
+		if self._isdir(path_id):
 			raise fuse.FuseOSError(errno.EISDIR)
 		self.api.delete(path_id)
-		self._purge(dirname(path), (path, 'resolve'))
+		self.created.discard(path)
+		self._purge(dirname(path), (path, ['resolve', 'info']))
+
+
+	def read(self, path, size, offset, fh):
+		path_id = self._resolve(path)
+		return self.api.get(path_id, byte_range='{}-{}'.format(offset, offset+size))
+
+	def create(self, path, mode, fi=None):
+		if not self._isdir(self._resolve(dirname(path))):
+			raise fuse.FuseOSError(errno.ENOTDIR)
+		try: path_id = self._resolve(path)
+		except api_v5.DoesNotExists: pass
+		else:
+			if self._isdir(path_id):
+				raise fuse.FuseOSError(errno.EISDIR)
+			if path_id and mode & (os.O_CREAT and os.O_EXCL):
+				raise fuse.FuseOSError(errno.EEXIST)
+		self.created.add(path)
+
+	def write(self, path, data, offset, fh):
+		path_dir = dirname(path)
+		try: path_id = self._resolve(path)
+		except api_v5.DoesNotExists: path_id = None
+
+		# Create/modify file, upload it with tmp name
+		with NamedTemporaryFile() as tmp:
+			if path_id: tmp.write(self.api.get(path_id))
+			if offset: tmp.seek(offset)
+			tmp.write(data)
+			tmp.flush()
+			res = self.api.put(tmp.name, self._resolve(path_dir), overwrite=False)
+
+		# Set proper name
+		try:
+			if path_id: self.api.delete(path_id)
+			self.api.info_update(res['id'], dict(name=basename(path)))
+		finally:
+			self.created.discard(path)
+			# Always drop path_dir caches, just to be safe
+			self._purge((path, ['resolve', 'info', 'listdir']), (path_dir, ['info', 'listdir']))
+
+		return len(data)
+
+	def truncate(self, path, length, fh=None):
+		if path in self.created: return
+		path_id = self._resolve(path)
+
+		# Modify file, upload it with tmp name
+		with NamedTemporaryFile() as tmp:
+			tmp.write(self.api.get(path_id))
+			tmp.truncate(length)
+			res = self.api.put(tmp.name, self._resolve(path_dir), overwrite=False)
+
+		# Set proper name
+		try:
+			self.api.delete(path_id)
+			self.api.info_update(res['id'], dict(name=basename(path)))
+		finally:
+			# Always drop path_dir caches, just to be safe
+			self._purge((path, ['resolve', 'info']), (path_dir, ['info', 'listdir']))
 
 
 
@@ -212,6 +287,8 @@ def main():
 				opts_fs[opt] = val
 			elif opt in ['api_cache_scale']: # numeric options
 				opts_fs[opt] = float(val)
+			elif opt in []: # strings
+				opts_fs[opt] = val
 			else: opts_fuse[opt] = val
 	log.debug('FS options: {}; FUSE: {}'.format(opts_fs, opts_fuse))
 
