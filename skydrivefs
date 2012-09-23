@@ -74,15 +74,18 @@ class PerPathCache(CacheLRU):
 class SkyDriveFS(fuse.LoggingMixIn, fuse.Operations):
 
 
-	def __init__(self, api, root='me/skydrive', log=None):
+	def __init__(self, api, root='me/skydrive', log=None, api_cache=True):
 		self.api, self.root = api, root
 		self.log = log or logging.getLogger(
 			'{}.{}'.format(__name__, self.__class__.__name__) )
 
-		# Caches
-		self._resolve = PerPathCache(self.api.resolve_path, maxsize=200)
-		self._info = PerPathCache(self.api.info, maxsize=100)
-		self._listdir = PerPathCache(self.api.listdir, maxsize=50)
+		if api_cache:
+			self._resolve = PerPathCache(self.api.resolve_path, maxsize=200)
+			self._info = PerPathCache(self.api.info, maxsize=100)
+			self._listdir = PerPathCache(self.api.listdir, maxsize=50)
+		else:
+			self._resolve, self._info, self._listdir =\
+				self.api.resolve_path, self.api.info, self.api.listdir
 
 	def _purge(self, *entries, **kwz):
 		caches = kwz.keys() or ['info', 'listdir']
@@ -161,7 +164,7 @@ class SkyDriveFS(fuse.LoggingMixIn, fuse.Operations):
 
 
 def main():
-	ignored_mount_opts = 'rw', 'exec', 'suid', 'dev', 'user'
+	opts_fs, opts_fuse = dict(api_cache=True), dict(foreground=True)
 
 	import argparse
 	parser = argparse.ArgumentParser(
@@ -175,8 +178,12 @@ def main():
 			' Default: %(default)s')
 	parser.add_argument('mountpoint', metavar='path', help='Path to mount SkyDrive to.')
 	parser.add_argument('-o', '--mount-options',
-		help='Supported options: none yet,'
-			' ignored: {}; rest will fail.'.format(', '.join(ignored_mount_opts)))
+		help=''.join([ 'Comma-separated list of mount options.',
+			' Use "someflag=no", or "someflag=false" to disable binary flags.',
+			' SkyDriveFS options: {};'\
+				.format(', '.join('{} (default: {})'.format(k, v) for k,v in opts_fs.viewitems())),
+				' the rest is passed to fuse.',
+			' See "man mount.fuse" for the list of fuse-specific options.' ]))
 	parser.add_argument('--debug', action='store_true', help='Verbose operation mode.')
 	optz = parser.parse_args()
 
@@ -187,10 +194,16 @@ def main():
 	if optz.mount_options:
 		for opt in optz.mount_options.strip().strip(',').split(','):
 			if '=' in opt: opt, val = opt.split('=', 1)
-			elif opt.startswith('no'): opt, val = opt[2:], False
+			# elif opt.startswith('no_'): opt, val = opt[3:], False
 			else: val = True
-			if not opt or opt in ignored_mount_opts: continue
-			parser.error('Unsupported mount option: {}'.format(opt))
+			if opt in ['api_cache']: # binary flags
+				if isinstance(val, types.StringTypes):
+					if val.lower() in ['yes', 'true', 'y']: val = True
+					elif val.lower() in ['no', 'false', 'n']: val = False
+					else: parser.error('Unrecognized flag ({!r}) value: {!r}'.format(opt, val))
+				opts_fs[opt] = val
+			else: opts_fuse[opt] = val
+	log.debug('FS options: {}; FUSE: {}'.format(opts_fs, opts_fuse))
 
 	if ':' in optz.config:
 		optz.config, skydrive_path = optz.config.split(':', 1)
@@ -203,7 +216,7 @@ def main():
 		skydrive_path = api.resolve_path(skydrive_path or 'me/skydrive')
 
 	fuse.FUSE(
-		SkyDriveFS(api, skydrive_path, log=log),
-		optz.mountpoint, foreground=True )
+		SkyDriveFS(api, skydrive_path, log=log, **opts_fs),
+		optz.mountpoint, **opts_fuse )
 
 if __name__ == '__main__': main()

@@ -38,6 +38,9 @@ Examples with fstab(5) syntax (any one of these will do):
 	/var/lib/skydrive.yaml /mnt/skydrive fuse.skydrivefs defaults 0 0
 	/var/lib/skydrive.yaml:Pics /mnt/skydrive fuse.skydrivefs defaults 0 0
 
+Available mount options can be found in `skydrivefs --help` output
+(skydrive-specific) and `man mount.fuse` (more general fuse options).
+
 Latter example mounts "Pics" SkyDrive folder instead of root.
 
 Make sure configuration file (`/var/lib/skydrive.yaml` in fstab examples above)
