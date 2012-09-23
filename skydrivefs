@@ -210,7 +210,8 @@ class SkyDriveFS(fuse.LoggingMixIn, fuse.Operations):
 			if offset: tmp.seek(offset)
 			tmp.write(data)
 			tmp.flush()
-			res = self.api.put(tmp.name, self._resolve(path_dir), overwrite=False)
+			res = self.api.put( tmp.name,
+				self._resolve(path_dir), overwrite='ChooseNewName' )
 
 		# Set proper name
 		try:
@@ -231,7 +232,8 @@ class SkyDriveFS(fuse.LoggingMixIn, fuse.Operations):
 		with NamedTemporaryFile() as tmp:
 			tmp.write(self.api.get(path_id))
 			tmp.truncate(length)
-			res = self.api.put(tmp.name, self._resolve(path_dir), overwrite=False)
+			res = self.api.put( tmp.name,
+				self._resolve(path_dir), overwrite='ChooseNewName' )
 
 		# Set proper name
 		try:
