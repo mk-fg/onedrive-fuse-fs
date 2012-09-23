@@ -67,6 +67,10 @@ requirement for configuration-file handling in python-skydrive; install it in a
 similar way if you're using `python setup.py install` or some older packaging
 tools)
 
+Before using this module, configuraton file with authentication data must be
+created, as described in python-skydrive documentation
+[here](https://github.com/mk-fg/python-skydrive#command-line-usage).
+
 Usage from checkout (no installation - apart from aforementioned module(s) -
 necessary), can be run from unprivileged user:
 
