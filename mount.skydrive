@@ -3,7 +3,8 @@ from __future__ import unicode_literals, print_function
 
 import itertools as it, operator as op, functools as ft
 from os.path import basename, dirname
-import os, sys, errno, stat, re, logging
+from collections import OrderedDict, namedtuple
+import os, sys, types, errno, stat, re, logging
 
 from skydrive import api_v5, conf
 import fuse
@@ -24,12 +25,72 @@ except ImportError:
 		return timegm(ts_utc.utctimetuple())
 
 
+
+class CacheLRU(object):
+
+	CE = namedtuple('CachedException', 'err')
+	hits = misses = 0
+
+	def __init__(self, func, cache_exceptions=True, maxsize=100):
+		self.func, self.maxsize, self.ce = func, maxsize, cache_exceptions
+		self.cache = OrderedDict()
+
+	@staticmethod
+	def _key(argz, kwz):
+		return kwz.pop('_cache_key', False)\
+			or (argz + tuple(sorted(kwz.viewitems())))
+
+	def __call__(self, *argz, **kwz):
+		key = self._key(argz, kwz)
+		try:
+			res = self.cache.pop(key)
+			self.hits += 1
+		except KeyError:
+			try: res = self.func(*argz, **kwz)
+			except Exception as err:
+				if not self.ce: raise
+				res = self.CE(err)
+			self.misses += 1
+			while len(self.cache) >= self.maxsize:
+				self.cache.popitem(0)
+		self.cache[key] = res
+		if isinstance(res, self.CE): raise res.err
+		else: return res
+
+	def purge(self, *argz, **kwz):
+		self.cache.pop(self._key(argz, kwz), None)
+
+
+class PerPathCache(CacheLRU):
+	@staticmethod
+	def _key(argz, kwz): return argz[0]
+	def __call__(self, path):
+		return super(PerPathCache, self).__call__(path)
+	def purge(self, path):
+		return super(PerPathCache, self).purge(path)
+
+
+
 class SkyDriveFS(fuse.LoggingMixIn, fuse.Operations):
+
 
 	def __init__(self, api, root='me/skydrive', log=None):
 		self.api, self.root = api, root
 		self.log = log or logging.getLogger(
 			'{}.{}'.format(__name__, self.__class__.__name__) )
+
+		# Caches
+		self._resolve = PerPathCache(self.api.resolve_path, maxsize=200)
+		self._info = PerPathCache(self.api.info, maxsize=100)
+		self._listdir = PerPathCache(self.api.listdir, maxsize=50)
+
+	def _purge(self, *entries, **kwz):
+		caches = kwz.keys() or ['info', 'listdir']
+		for entry in entries:
+			if isinstance(entry, types.StringTypes): ec = [caches]
+			else: entry, ec = entry
+			for cache in ec: op.attrgetter('_{}.purge'.format(cache))(self)(entry)
+
 
 	def __call__(self, op, *args):
 		try: res = super(SkyDriveFS, self).__call__(op, *args)
@@ -43,10 +104,10 @@ class SkyDriveFS(fuse.LoggingMixIn, fuse.Operations):
 
 
 	def access(self, path, mode):
-		self.api.resolve_path(path)
+		self._resolve(path)
 
 	def getattr(self, path, fh=None):
-		obj = self.api.resolve_path(path, objects=True)
+		obj = self._info(self._resolve(path))
 		obj_mtime = obj.get('updated_time') or obj.get('created_time')
 		return dict( (k,v) for k,v in [
 			( 'st_mode', (stat.S_IFDIR | 0755)
@@ -56,27 +117,32 @@ class SkyDriveFS(fuse.LoggingMixIn, fuse.Operations):
 
 	def mkdir(self, path, mode):
 		name, parent = basename(path),\
-			self.api.resolve_path(dirname(path)) or self.root
+			self._resolve(dirname(path)) or self.root
 		self.api.mkdir(name, parent)
+		self._purge(parent)
 
 	def readdir(self, path, fh):
 		return ['.', '..'] + map( op.itemgetter('name'),
-			self.api.listdir(self.api.resolve_path(path)) )
+			self._listdir(self._resolve(path)) )
 
 	def rename(self, old, new):
 		if old == new: return
-		new_dir, old_id = dirname(new), self.api.resolve_path(old)
-		if new_dir != dirname(old):
-			self.api.move(old_id, self.api.resolve_path(new_dir))
+		new_dir, old_dir = dirname(new), dirname(old)
+		old_id = self._resolve(old)
+		if new_dir != old_dir:
+			self.api.move(old_id, self._resolve(new_dir))
+			self._purge(old_dir, (old, 'resolve'))
 		self.api.info_update(old_id, dict(name=basename(new)))
+		self._purge(new_dir)
 
 	def rmdir(self, path):
-		path_id = self.api.resolve_path(path)
+		path_id = self._resolve(path)
 		if not path_id.startswith('folder.'):
 			raise fuse.FuseOSError(errno.ENOTDIR)
-		elif self.api.listdir(path_id):
+		elif self._listdir(path_id):
 			raise fuse.FuseOSError(errno.ENOTEMPTY)
 		self.api.delete(path_id)
+		self._purge(dirname(path), (path, 'resolve'))
 
 	def statfs(self, path):
 		free, quota = self.api.get_quota()
@@ -85,10 +151,12 @@ class SkyDriveFS(fuse.LoggingMixIn, fuse.Operations):
 			f_files=-1, f_flag=0, f_frsize=1, f_namemax=256 )
 
 	def unlink(self, path):
-		path_id = self.api.resolve_path(path)
+		path_id = self._resolve(path)
 		if path_id.startswith('folder.'):
 			raise fuse.FuseOSError(errno.EISDIR)
 		self.api.delete(path_id)
+		self._purge(dirname(path), (path, 'resolve'))
+
 
 
 
