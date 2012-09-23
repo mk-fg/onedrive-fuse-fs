@@ -20,11 +20,11 @@ similar way if you're using `python setup.py install` or some older packaging
 tools)
 
 Usage from checkout (no installation - apart from aforementioned module(s) -
-necessary):
+necessary), can be run from unprivileged user:
 
-	# ./mount.skydrive /mnt/skydrive
+	% ./mount.skydrive /mnt/skydrive
 
-Install to system-wide $PATH (needs system-wide fusepy module as well):
+Install to system-wide $PATH (might need system-wide fusepy module as well):
 
 	# pip install fusepy
 	# install -m755 mount.skydrive /usr/local/sbin/

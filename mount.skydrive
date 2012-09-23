@@ -12,7 +12,6 @@ import fuse
 from datetime import datetime, timedelta
 from calendar import timegm
 try:
-	# raise ImportError()
 	import iso8601
 	def parse_ts(ts):
 		return timegm(iso8601.parse_date(ts).utctimetuple())
