@@ -74,15 +74,21 @@ class PerPathCache(CacheLRU):
 class SkyDriveFS(fuse.LoggingMixIn, fuse.Operations):
 
 
-	def __init__(self, api, root='me/skydrive', log=None, api_cache=True):
+	def __init__( self,
+			api, root='me/skydrive', log=None,
+			api_cache=True, api_cache_scale=1.0 ):
+
 		self.api, self.root = api, root
 		self.log = log or logging.getLogger(
 			'{}.{}'.format(__name__, self.__class__.__name__) )
 
-		if api_cache:
-			self._resolve = PerPathCache(self.api.resolve_path, maxsize=200)
-			self._info = PerPathCache(self.api.info, maxsize=100)
-			self._listdir = PerPathCache(self.api.listdir, maxsize=50)
+		if api_cache and api_cache_scale > 0:
+			self._resolve = PerPathCache(
+				self.api.resolve_path, maxsize=int(200 * api_cache_scale) )
+			self._info = PerPathCache(
+				self.api.info, maxsize=int(100 * api_cache_scale) )
+			self._listdir = PerPathCache(
+				self.api.listdir, maxsize=int(50 * api_cache_scale) )
 		else:
 			self._resolve, self._info, self._listdir =\
 				self.api.resolve_path, self.api.info, self.api.listdir
@@ -164,7 +170,8 @@ class SkyDriveFS(fuse.LoggingMixIn, fuse.Operations):
 
 
 def main():
-	opts_fs, opts_fuse = dict(api_cache=True), dict(foreground=True)
+	opts_fs = dict(api_cache=True, api_cache_scale=1.0)
+	opts_fuse = dict(foreground=True)
 
 	import argparse
 	parser = argparse.ArgumentParser(
@@ -181,7 +188,8 @@ def main():
 		help=''.join([ 'Comma-separated list of mount options.',
 			' Use "someflag=no", or "someflag=false" to disable binary flags.',
 			' SkyDriveFS options: {};'\
-				.format(', '.join('{} (default: {})'.format(k, v) for k,v in opts_fs.viewitems())),
+				.format( ', '.join('{} (default: {})'.format(k, v)
+					for k,v in sorted(opts_fs.viewitems())) ),
 				' the rest is passed to fuse.',
 			' See "man mount.fuse" for the list of fuse-specific options.' ]))
 	parser.add_argument('--debug', action='store_true', help='Verbose operation mode.')
@@ -202,6 +210,8 @@ def main():
 					elif val.lower() in ['no', 'false', 'n']: val = False
 					else: parser.error('Unrecognized flag ({!r}) value: {!r}'.format(opt, val))
 				opts_fs[opt] = val
+			elif opt in ['api_cache_scale']: # numeric options
+				opts_fs[opt] = float(val)
 			else: opts_fuse[opt] = val
 	log.debug('FS options: {}; FUSE: {}'.format(opts_fs, opts_fuse))
 
