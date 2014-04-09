@@ -7,7 +7,7 @@ from collections import OrderedDict, namedtuple
 from tempfile import NamedTemporaryFile
 import os, sys, types, errno, stat, re, logging
 
-from skydrive import api_v5, conf
+from onedrive import api_v5, conf
 import fuse
 
 
@@ -72,7 +72,7 @@ class PerPathCache(CacheLRU):
 
 
 
-class SkyDriveFS(fuse.LoggingMixIn, fuse.Operations):
+class OneDriveFS(fuse.LoggingMixIn, fuse.Operations):
 
 
 	def __init__( self,
@@ -111,7 +111,7 @@ class SkyDriveFS(fuse.LoggingMixIn, fuse.Operations):
 
 
 	def __call__(self, op, *args):
-		try: res = super(SkyDriveFS, self).__call__(op, *args)
+		try: res = super(OneDriveFS, self).__call__(op, *args)
 		except api_v5.DoesNotExists:
 			raise fuse.FuseOSError(errno.ENOENT)
 		except api_v5.ProtocolError as err:
@@ -255,20 +255,20 @@ def main():
 
 	import argparse
 	parser = argparse.ArgumentParser(
-		description='Mount SkyDrive as a FUSE filesystem.')
+		description='Mount OneDrive as a FUSE filesystem.')
 	parser.add_argument('config',
-		metavar='config_path[:skydrive_path]',
+		metavar='config_path[:onedrive_path]',
 		nargs='?', default=conf.ConfigMixin.conf_path_default,
 		help='Writable configuration state-file (yaml).'
 			' Used to store authorization_code, access and refresh tokens.'
 			' Should initially contain at least something like "{client: {id: xxx, secret: yyy}}".'
 			' Path might be appended to it after colon to make only that folder accessible.'
 			' Default: %(default)s')
-	parser.add_argument('mountpoint', metavar='path', help='Path to mount SkyDrive to.')
+	parser.add_argument('mountpoint', metavar='path', help='Path to mount OneDrive to.')
 	parser.add_argument('-o', '--mount-options',
 		help=''.join([ 'Comma-separated list of mount options.',
 			' Use "someflag=no", or "someflag=false" to disable binary flags.',
-			' SkyDriveFS options: {};'\
+			' OneDriveFS options: {};'\
 				.format( ', '.join('{} (default: {})'.format(k, v)
 					for k,v in sorted(opts_fs.viewitems())) ),
 				' the rest is passed to fuse.',
@@ -299,18 +299,18 @@ def main():
 	log.debug('FS options: {}; FUSE: {}'.format(opts_fs, opts_fuse))
 
 	if ':' in optz.config:
-		optz.config, skydrive_path = optz.config.split(':', 1)
+		optz.config, onedrive_path = optz.config.split(':', 1)
 		if not optz.config: optz.config = conf.ConfigMixin.conf_path_default
-	else: skydrive_path = None
+	else: onedrive_path = None
 
-	api = api_v5.PersistentSkyDriveAPI.from_conf(optz.config)
-	if not skydrive_path or not re.search(
+	api = api_v5.PersistentOneDriveAPI.from_conf(optz.config)
+	if not onedrive_path or not re.search(
 			r'^(file|folder)\.[0-9a-f]{16}\.[0-9A-F]{16}!\d+'
-			r'|folder\.[0-9a-f]{16}$', skydrive_path ):
-		skydrive_path = api.resolve_path(skydrive_path or 'me/skydrive')
+			r'|folder\.[0-9a-f]{16}$', onedrive_path ):
+		onedrive_path = api.resolve_path(onedrive_path or 'me/skydrive')
 
 	fuse.FUSE(
-		SkyDriveFS(api, skydrive_path, log=log, **opts_fs),
+		OneDriveFS(api, onedrive_path, log=log, **opts_fs),
 		optz.mountpoint, **opts_fuse )
 
 if __name__ == '__main__': main()
