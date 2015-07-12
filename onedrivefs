@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python2
 from __future__ import unicode_literals, print_function
 
 import itertools as it, operator as op, functools as ft
@@ -251,7 +251,6 @@ class OneDriveFS(fuse.LoggingMixIn, fuse.Operations):
 
 def main():
 	opts_fs = dict(api_cache=True, api_cache_scale=1.0)
-	opts_fuse = dict(foreground=True)
 
 	import argparse
 	parser = argparse.ArgumentParser(
@@ -273,13 +272,17 @@ def main():
 					for k,v in sorted(opts_fs.viewitems())) ),
 				' the rest is passed to fuse.',
 			' See "man mount.fuse" for the list of fuse-specific options.' ]))
-	parser.add_argument('--debug', action='store_true', help='Verbose operation mode.')
+	parser.add_argument('-f', '--foreground', action='store_true',
+		help='Dont fork into background after mount succeeds.')
+	parser.add_argument('--debug', action='store_true',
+		help='Verbose operation mode. Implies --foreground.')
 	optz = parser.parse_args()
 
 	log = logging.getLogger()
 	logging.basicConfig(level=logging.WARNING
 		if not optz.debug else logging.DEBUG)
 
+	opts_fuse = dict(foreground=optz.foreground or optz.debug)
 	if optz.mount_options:
 		for opt in optz.mount_options.strip().strip(',').split(','):
 			if '=' in opt: opt, val = opt.split('=', 1)
