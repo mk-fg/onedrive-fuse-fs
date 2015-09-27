@@ -92,14 +92,16 @@ Use from $PATH with `mount` command:
 Examples with fstab(5) syntax (any one of these will do):
 
 	/var/lib/onedrive.yaml /mnt/onedrive fuse.onedrivefs defaults 0 0
-	/var/lib/onedrive.yaml:Pics /mnt/onedrive fuse.onedrivefs defaults 0 0
+	/var/lib/onedrive.yaml /mnt/onedrive fuse.onedrivefs allow_other
+	/home/myuser/.lcrc /home/myuser/clouds/OneDrive fuse.onedrivefs user=myuser
+	/var/lib/onedrive.yaml:Pics /mnt/onedrive fuse.onedrivefs defaults
 
 Available mount options can be found in `onedrivefs --help` output
 (onedrive-specific) and `man mount.fuse` (more general fuse options).
 
-Latter example mounts "Pics" OneDrive folder instead of root.
+Latter fstab example line mounts "Pics" OneDrive folder instead of root.
 "subdir" fuse module can be also used to the same effect.
 
 Make sure configuration file (`/var/lib/onedrive.yaml` in fstab examples above)
-is not accessible to anyone but root (or dedicated user), and is writable -
+is not accessible to anyone but root (or a dedicated user), and is writable -
 refreshed access tokens will be stored there.
