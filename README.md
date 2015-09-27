@@ -17,6 +17,11 @@ Main purpose of such abstraction is a convenient browsing (in shell or any
 general-purpose file manager), transfer or synchronization of files with simple
 unix tools like "ls", "cp" or "rsync".
 
+Also, whole script was one-evening project to see if it'd work, and haven't been
+touched in like 3 years now (2015), so can be improved a lot (wrt performance,
+caching, handling odd cases, updated to use new api, etc), but apparently still
+works, just don't expect a lot from it.
+
 Service was called SkyDrive prior to 2014-02-19, when it got renamed to OneDrive.
 This repo was similarly renamed from skydrive-fuse-fs to onedrive-fuse-fs.
 
@@ -25,13 +30,14 @@ Limitations
 ----------------------------------------
 
 OneDrive is not a filesystem (and in fact, basically a key-value storage), and
-doesn't expose anything resembling a posix fs interface, so lots of limitations
-apply.
+doesn't expose anything resembling a posix fs interface (at least in old API
+that [python-onedrive module](https://github.com/mk-fg/python-onedrive/) uses),
+so lots of limitations apply.
 
-By default (with "api_cache" option), module aggressively caches all retreived
-data to avoid time-consuming https requests, so any changes performed on
-OneDrive outside of the script, might be invisible until remount or cache
-expiration / invalidation.
+By default (with "api_cache" option), module aggressively caches some data (but
+not as much as possible) to avoid time-consuming https requests, so any changes
+performed on OneDrive outside of the script, might be invisible until remount or
+cache expiration / invalidation.
 
 Even with api_cache disabled, lots of operations will still have a race
 conditions in them.
