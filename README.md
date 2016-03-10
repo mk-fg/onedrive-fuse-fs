@@ -1,6 +1,12 @@
 onedrive-fuse-fs
 ----------------------------------------
 
+**Deprecation Warning:**
+this script uses obsolete [python-onedrive](https://github.com/mk-fg/python-onedrive)
+module for *old* OneDrive API, and unlikely to ever be rewritten for new API,
+so it might be a good idea to use something else more future-proof for new
+projects, if there are other options available.
+
 Script to mount Microsoft OneDrive (formerly known as SkyDrive) folder as a FUSE
 filesystem.
 
